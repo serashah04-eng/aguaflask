@@ -9,7 +9,7 @@ Everything happens in Telegram. There's no website, no LinkedIn API and no
 scheduling. The bot runs in one of two ways:
 
 - **On Vercel**: Telegram delivers each message to a serverless function
-  (`api/webhook.py`), and data is stored in Supabase. It works when your
+  (`app.py`, served at `/api/webhook`), and data is stored in Supabase. It works when your
   computer is off.
 - **On this computer**: `python bot.py` polls Telegram, and data is stored in a
   local SQLite file (or in Supabase, if it's configured in `.env`).
@@ -143,7 +143,7 @@ To inspect the data: `python -c "import sqlite3; [print(dict(r)) for r in sqlite
 | File | Purpose |
 |---|---|
 | `bot.py` | The Telegram bot: scoring, news, drafting, approval loop (and local polling) |
-| `api/webhook.py` | Vercel function that receives Telegram messages |
+| `app.py` | Vercel entrypoint (WSGI app) that receives Telegram messages at `/api/webhook` |
 | `storage.py` | SQLite and Supabase storage behind one interface |
 | `supabase_schema.sql` | Supabase tables (run once in the SQL editor) |
 | `set_webhook.py` | Points Telegram at the Vercel URL, or shows the current setting |
