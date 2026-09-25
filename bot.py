@@ -10,11 +10,9 @@ Run:  python bot.py          (long-polls Telegram; leave it running)
 """
 
 import datetime as dt
-import hashlib
 import json
 import os
 import re
-import sqlite3
 import sys
 import time
 import traceback
@@ -23,66 +21,9 @@ import urllib.request
 import xml.etree.ElementTree as ET
 
 import drafter  # reuses the existing Telegram helper, Gemini wrapper and voice lint
-from drafter import FACTS_FILE, ROOT, VOICE_FILE, genai, lint, llm, telegram
-
-DB_FILE = ROOT / "data" / "aguaflask.db"
+from drafter import FACTS_FILE, VOICE_FILE, genai, lint, llm, telegram
+from storage import get_store, now
 PASS_MARK = 6
-
-
-# ----------------------------------------------------------------------------
-# Storage (SQLite: one local file, no external service)
-# ----------------------------------------------------------------------------
-
-def db():
-    DB_FILE.parent.mkdir(exist_ok=True)
-    conn = sqlite3.connect(DB_FILE)
-    conn.row_factory = sqlite3.Row
-    conn.executescript("""
-        CREATE TABLE IF NOT EXISTS notes (
-            id INTEGER PRIMARY KEY,
-            chat_id INTEGER, telegram_message_id INTEGER,
-            text TEXT NOT NULL, score INTEGER, score_reason TEXT,
-            created_at TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS drafts (
-            id INTEGER PRIMARY KEY,
-            note_id INTEGER REFERENCES notes(id), note_text TEXT NOT NULL,
-            draft TEXT NOT NULL, news_json TEXT, news_used INTEGER NOT NULL DEFAULT 0,
-            voice_skill_id INTEGER REFERENCES voice_skill(id),
-            status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
-            telegram_message_id INTEGER,
-            created_at TEXT NOT NULL, decided_at TEXT
-        );
-        CREATE TABLE IF NOT EXISTS voice_skill (
-            id INTEGER PRIMARY KEY, content TEXT NOT NULL, sha256 TEXT UNIQUE NOT NULL, loaded_at TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);
-    """)
-    return conn
-
-
-def now():
-    return dt.datetime.now().isoformat(timespec="seconds")
-
-
-def setting(conn, key, value=None):
-    if value is None:
-        row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
-        return row["value"] if row else None
-    conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, str(value)))
-    conn.commit()
-
-
-def current_voice_skill(conn):
-    """Store voice-skill.txt; a new row is added only when the file changes, so each draft records which version wrote it."""
-    content = VOICE_FILE.read_text(encoding="utf-8")
-    digest = hashlib.sha256(content.encode()).hexdigest()
-    row = conn.execute("SELECT id FROM voice_skill WHERE sha256 = ?", (digest,)).fetchone()
-    if row:
-        return row["id"], content
-    cur = conn.execute("INSERT INTO voice_skill (content, sha256, loaded_at) VALUES (?, ?, ?)", (content, digest, now()))
-    conn.commit()
-    return cur.lastrowid, content
 
 
 # ----------------------------------------------------------------------------
@@ -307,14 +248,11 @@ def send(chat_id, text, reply_to=None):
     return last["message_id"]
 
 
-def handle_note(conn, chat_id, message_id, text):
+def handle_note(store, chat_id, message_id, text):
     telegram("sendChatAction", chat_id=chat_id, action="typing")
     result = score_note(text)
     score, reason = max(0, min(10, int(result["score"]))), result["reason"].strip()
-    note_id = conn.execute(
-        "INSERT INTO notes (chat_id, telegram_message_id, text, score, score_reason, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-        (chat_id, message_id, text, score, reason, now())).lastrowid
-    conn.commit()
+    note_id = store.add_note(chat_id, message_id, text, score, reason)
     print(f"  note #{note_id} scored {score}/10: {reason}")
 
     if score < PASS_MARK:
@@ -325,7 +263,8 @@ def handle_note(conn, chat_id, message_id, text):
 
     send(chat_id, f"Score: {score}/10\nReason: {reason}\n\nFinding a news angle and drafting...", reply_to=message_id)
     telegram("sendChatAction", chat_id=chat_id, action="typing")
-    voice_id, voice = current_voice_skill(conn)
+    voice = VOICE_FILE.read_text(encoding="utf-8")
+    voice_id = store.voice_skill_id(voice)  # stores voice-skill.txt, a new version only when it changes
     terms, candidates, chosen = find_news(text)
     news_items = [chosen] if chosen else []  # the drafter only ever sees news that passed the relevance check
     print(f"  search: {terms['search_phrase']!r} -> {len(candidates)} result(s), relevant: {bool(chosen)}")
@@ -337,11 +276,7 @@ def handle_note(conn, chat_id, message_id, text):
         used = {**used, "summary": result["news_summary"]}
     body = result["post"].strip() + (("\n" + news_block(used)) if used else "")
     news_record = {"search_terms": terms, "candidates": candidates, "passed_relevance": chosen, "used": used}
-    draft_id = conn.execute(
-        "INSERT INTO drafts (note_id, note_text, draft, news_json, news_used, voice_skill_id, status, created_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)",
-        (note_id, text, body, json.dumps(news_record, ensure_ascii=False), int(bool(used)), voice_id, now())).lastrowid
-    conn.commit()
+    draft_id = store.add_draft(note_id, text, body, news_record, bool(used), voice_id)
 
     extra = ""
     if result["placeholders"]:
@@ -349,18 +284,17 @@ def handle_note(conn, chat_id, message_id, text):
     msg_id = send(chat_id, f"DRAFT LINKEDIN POST  (#{draft_id})\n\n{body}{extra}\n\n"
                            "Status: PENDING APPROVAL\n"
                            "Reply APPROVE or REJECT. To decide on an older draft, reply to that draft's message.")
-    conn.execute("UPDATE drafts SET telegram_message_id = ? WHERE id = ?", (msg_id, draft_id))
-    conn.commit()
+    store.set_draft_message(draft_id, msg_id)
     print(f"  draft #{draft_id} sent (news used: {bool(used)})")
 
 
-def handle_decision(conn, chat_id, decision, reply_to_msg_id):
+def handle_decision(store, chat_id, decision, reply_to_msg_id):
     """APPROVE / REJECT applies to the draft being replied to, else the most recent pending draft."""
     row = None
     if reply_to_msg_id:
-        row = conn.execute("SELECT * FROM drafts WHERE telegram_message_id = ?", (reply_to_msg_id,)).fetchone()
+        row = store.draft_by_message(reply_to_msg_id)
     if row is None:
-        row = conn.execute("SELECT * FROM drafts WHERE status = 'pending' ORDER BY id DESC LIMIT 1").fetchone()
+        row = store.latest_pending()
     if row is None:
         send(chat_id, "There's no pending draft to decide on.")
         return
@@ -374,8 +308,7 @@ def handle_decision(conn, chat_id, decision, reply_to_msg_id):
         send(chat_id, "There's no pending draft. To change your decision on a draft, reply to that draft's message.")
         return
     previous = row["status"]
-    conn.execute("UPDATE drafts SET status = ?, decided_at = ? WHERE id = ?", (status, now(), row["id"]))
-    conn.commit()
+    store.decide(row["id"], status)
     print(f"  draft #{row['id']} {previous} -> {status}")
     if status == "approved":
         send(chat_id, f"Approved. This draft is ready for you to publish. (#{row['id']})",
@@ -385,7 +318,7 @@ def handle_decision(conn, chat_id, decision, reply_to_msg_id):
              reply_to=row["telegram_message_id"])
 
 
-def handle_update(conn, update):
+def handle_update(store, update):
     msg = update.get("message")
     if not msg or msg["chat"]["type"] != "private":
         return
@@ -393,9 +326,9 @@ def handle_update(conn, update):
 
     # Only Meera may use the bot: the first person to message it becomes the owner
     # (or set TELEGRAM_ALLOWED_USER_ID in .env).
-    owner = os.environ.get("TELEGRAM_ALLOWED_USER_ID") or setting(conn, "owner_user_id")
+    owner = os.environ.get("TELEGRAM_ALLOWED_USER_ID") or store.get_setting("owner_user_id")
     if owner is None:
-        setting(conn, "owner_user_id", user_id)
+        store.set_setting("owner_user_id", user_id)
         owner = str(user_id)
         print(f"  owner set to user {user_id}")
     if str(user_id) != str(owner):
@@ -412,41 +345,72 @@ def handle_update(conn, update):
     if command in ("/start", "/help"):
         send(chat_id, HELP)
     elif command == "/stats":
-        n = conn.execute("SELECT COUNT(*), SUM(score >= ?) FROM notes", (PASS_MARK,)).fetchone()
-        d = dict(conn.execute("SELECT status, COUNT(*) FROM drafts GROUP BY status").fetchall())
-        send(chat_id, f"Notes: {n[0]} ({n[1] or 0} scored {PASS_MARK}+)\n"
+        scores, statuses = store.note_scores(), store.draft_statuses()
+        d = {s: statuses.count(s) for s in ("pending", "approved", "rejected")}
+        passed = sum(1 for s in scores if s is not None and s >= PASS_MARK)
+        send(chat_id, f"Notes: {len(scores)} ({passed} scored {PASS_MARK}+)\n"
                       f"Drafts: {d.get('pending', 0)} pending, {d.get('approved', 0)} approved, {d.get('rejected', 0)} rejected")
     elif command == "/pending":
-        rows = conn.execute("SELECT id, note_text, created_at FROM drafts WHERE status = 'pending' ORDER BY id").fetchall()
+        rows = store.pending()
         send(chat_id, "\n".join(f"#{r['id']} ({r['created_at'][:10]}): {r['note_text'][:60]}" for r in rows)
              or "No pending drafts.")
     elif re.fullmatch(r"(approve|reject)[.!]?", text, re.I):
         reply_to = (msg.get("reply_to_message") or {}).get("message_id")
-        handle_decision(conn, chat_id, text.upper().rstrip(".!"), reply_to)
+        handle_decision(store, chat_id, text.upper().rstrip(".!"), reply_to)
     elif command.startswith("/"):
         send(chat_id, "Unknown command. " + HELP)
     else:
-        handle_note(conn, chat_id, msg["message_id"], text)
+        handle_note(store, chat_id, msg["message_id"], text)
 
 
-def main():
+def setup():
+    """Load keys and create the Gemini client. Shared by local polling and the Vercel webhook."""
     drafter.load_env()
     for key in ("TELEGRAM_BOT_TOKEN", "GEMINI_API_KEY"):
         if not os.environ.get(key):
-            sys.exit(f"{key} is not set in .env")
+            raise RuntimeError(f"{key} is not set")
     drafter.client = genai.Client(api_key=os.environ["GEMINI_API_KEY"],
                                   http_options=drafter.types.HttpOptions(timeout=90_000))  # ms
     drafter.MODEL = os.environ.get("GEMINI_MODEL") or drafter.MODEL
+    return get_store()
 
-    conn = db()
-    current_voice_skill(conn)
-    if telegram("getWebhookInfo").get("url"):  # polling can't run while a webhook is set
+
+def process(store, update):
+    """Handle one Telegram update once, even if Telegram delivers it again."""
+    if not store.claim_update(update["update_id"]):
+        print(f"  update {update['update_id']} already handled; skipping retry")
+        return
+    try:
+        handle_update(store, update)
+    except Exception as e:
+        traceback.print_exc()
+        chat = (update.get("message") or {}).get("chat", {}).get("id")
+        if chat:
+            try:
+                send(chat, f"Something went wrong processing that ({type(e).__name__}: {str(e)[:200]}). "
+                           "Please try again in a minute.")
+            except Exception:
+                pass
+
+
+def main():
+    """Local mode: long-poll Telegram from this computer."""
+    try:
+        store = setup()
+    except RuntimeError as e:
+        sys.exit(f"{e} in .env")
+    webhook = telegram("getWebhookInfo").get("url")
+    if webhook:
+        if "--force" not in sys.argv:
+            sys.exit(f"The bot is deployed with a webhook ({webhook}), so Telegram sends messages there, not here.\n"
+                     "Run `python bot.py --force` to switch back to running it on this computer "
+                     "(then run set_webhook.py again to switch back to Vercel).")
         telegram("deleteWebhook")
-        print("Removed an old webhook so the bot can poll.")
+        print("Removed the webhook; running locally.")
     me = telegram("getMe")
-    print(f"@{me['username']} is running with {drafter.MODEL}. Ctrl+C to stop.")
+    print(f"@{me['username']} is running locally with {drafter.MODEL} ({type(store).__name__}). Ctrl+C to stop.")
 
-    offset = int(setting(conn, "telegram_offset") or 0)
+    offset = int(store.get_setting("telegram_offset") or 0)
     while True:
         try:
             updates = telegram("getUpdates", _timeout=60, offset=offset, timeout=50,
@@ -457,18 +421,8 @@ def main():
             continue
         for update in updates:
             offset = update["update_id"] + 1
-            setting(conn, "telegram_offset", offset)  # saved before handling, so a crash never replays a note
-            try:
-                handle_update(conn, update)
-            except Exception as e:
-                traceback.print_exc()
-                chat = (update.get("message") or {}).get("chat", {}).get("id")
-                if chat:
-                    try:
-                        send(chat, f"Something went wrong processing that ({type(e).__name__}: {str(e)[:200]}). "
-                                   "Your note was not lost if it was saved; please try again in a minute.")
-                    except Exception:
-                        pass
+            store.set_setting("telegram_offset", offset)
+            process(store, update)
 
 
 if __name__ == "__main__":

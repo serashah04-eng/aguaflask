@@ -1,0 +1,8 @@
+{
+  "functions": {
+    "api/webhook.py": {
+      "maxDuration": 300,
+      "includeFiles": "{bot.py,drafter.py,storage.py,voice-skill.txt,facts.md}"
+    }
+  }
+}

@@ -1,0 +1,5 @@
+.env
+data/
+drafts/
+sample_export/
+__pycache__/

@@ -5,11 +5,17 @@ high enough come back as a LinkedIn draft in her voice, with a current news
 angle, for her to APPROVE or REJECT. Nothing is ever published: she posts
 approved drafts herself.
 
-Everything happens in Telegram. There is no website, no Vercel, no LinkedIn
-API and no scheduling.
+Everything happens in Telegram. There's no website, no LinkedIn API and no
+scheduling. The bot runs in one of two ways:
+
+- **On Vercel**: Telegram delivers each message to a serverless function
+  (`api/webhook.py`), and data is stored in Supabase. It works when your
+  computer is off.
+- **On this computer**: `python bot.py` polls Telegram, and data is stored in a
+  local SQLite file (or in Supabase, if it's configured in `.env`).
 
 ```
-Meera sends note ─► bot.py receives it (long polling)
+Meera sends note ─► Vercel webhook (or bot.py polling locally)
                      │
                      ▼
                Gemini scores 0-10 ──── < 6 ──► "Score: 3/10  Reason: ..." (no draft)
@@ -24,17 +30,40 @@ Meera sends note ─► bot.py receives it (long polling)
                      ▼
                "DRAFT LINKEDIN POST … Status: PENDING APPROVAL"
                      │
-         Meera replies APPROVE / REJECT ─► status saved in SQLite
+         Meera replies APPROVE / REJECT ─► status saved (Supabase / SQLite)
 ```
 
-## Run it
+## Deploy to Vercel
+
+1. **Supabase:** create a free project at supabase.com. Open SQL Editor >
+   New query, paste in `supabase_schema.sql` and click Run. Then, under
+   Project Settings > API, copy the Project URL and the `service_role` key.
+2. **GitHub:** push this folder to a private repository.
+3. **Webhook secret:** run `python set_webhook.py --make-secret`. It adds a
+   random `TELEGRAM_WEBHOOK_SECRET` to `.env`.
+4. **Vercel:** Add New > Project, then import the repository. Before
+   deploying, add these environment variables, copying the values from `.env`
+   and Supabase: `TELEGRAM_BOT_TOKEN`, `GEMINI_API_KEY`, `TELEGRAM_WEBHOOK_SECRET`,
+   `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` and (optionally)
+   `TELEGRAM_ALLOWED_USER_ID`. Then click Deploy.
+5. **Connect Telegram:** run `python set_webhook.py https://your-project.vercel.app`.
+6. **Check:** `python set_webhook.py --status` shows where Telegram is sending
+   messages, and the last error, if there was one.
+
+`vercel.json` gives the function up to 300 seconds, because a slow Gemini day
+can take minutes per draft. If Telegram re-sends a message while the bot is
+still working on it, the `processed_updates` table makes sure it's only drafted once.
+
+## Run it locally instead
 
 ```
 pip install google-genai
 python bot.py
 ```
 
-Leave the window open while the bot is running. Stop it with Ctrl+C.
+Leave the window open while the bot is running. Stop it with Ctrl+C. If a
+Vercel webhook is set, `bot.py` refuses to start, so the two never compete.
+`python bot.py --force` removes the webhook and runs locally.
 
 `.env` needs `TELEGRAM_BOT_TOKEN` and `GEMINI_API_KEY`. `TELEGRAM_ALLOWED_USER_ID`
 is optional: if it's empty, the first person to message the bot becomes its
@@ -96,7 +125,8 @@ spellings, and 350-550 words. If any rule is broken, the draft is revised once.
 
 ## Storage
 
-The storage is SQLite, in `data/aguaflask.db`, a single local file.
+The tables are the same in both backends (`storage.py`): Supabase on Vercel,
+and `data/aguaflask.db` (SQLite) locally.
 
 | Table | Contents |
 |---|---|
@@ -104,6 +134,7 @@ The storage is SQLite, in `data/aguaflask.db`, a single local file.
 | `drafts` | original note, draft (with source block), news JSON (search terms, candidates, the one used), status `pending`/`approved`/`rejected`, created and decided timestamps, voice skill version |
 | `voice_skill` | the content of `voice-skill.txt`. A new row is added whenever the file changes, and each draft records which version wrote it |
 | `settings` | Telegram polling offset, owner user id |
+| `processed_updates` | Telegram update ids already handled, so retries are skipped |
 
 To inspect the data: `python -c "import sqlite3; [print(dict(r)) for r in sqlite3.connect('data/aguaflask.db').execute('select id,status,created_at from drafts')]"`
 
@@ -111,7 +142,12 @@ To inspect the data: `python -c "import sqlite3; [print(dict(r)) for r in sqlite
 
 | File | Purpose |
 |---|---|
-| `bot.py` | The Telegram bot: scoring, news, drafting, approval loop, storage |
+| `bot.py` | The Telegram bot: scoring, news, drafting, approval loop (and local polling) |
+| `api/webhook.py` | Vercel function that receives Telegram messages |
+| `storage.py` | SQLite and Supabase storage behind one interface |
+| `supabase_schema.sql` | Supabase tables (run once in the SQL editor) |
+| `set_webhook.py` | Points Telegram at the Vercel URL, or shows the current setting |
+| `vercel.json`, `requirements.txt` | Vercel function settings and Python dependency |
 | `drafter.py` | Shared helpers (Telegram API, Gemini calls with retry and model fallback, voice lint), plus the older batch mode |
 | `voice-skill.txt` | Meera's voice, built from her 15 published pieces |
 | `facts.md` | Facts she has already made public, which the drafter may reuse |
