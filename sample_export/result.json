@@ -1,0 +1,17 @@
+{
+  "name": "Meera notes (SYNTHETIC SAMPLE - not real notes)",
+  "type": "private_channel",
+  "id": 1000000001,
+  "messages": [
+    {"id": 101, "type": "message", "date": "2026-08-04T23:12:00", "text": "reading a paper at 11pm on preservative efficacy testing. challenge test = you deliberately contaminate the product and see if the preservative kills it off in 28 days. most customers have no idea this exists. the 'preservative-free' crowd would hate how necessary it is"},
+    {"id": 102, "type": "message", "date": "2026-08-06T10:40:00", "text": "remind self: order more airless pumps before sept"},
+    {"id": 103, "type": "message", "date": "2026-08-09T16:05:00", "text": "at the unit today. batch had a slight colour shift in the last third of the run. CoA from start of run was fine. this is EXACTLY why we insisted on mid-batch sampling. supplier asked why we care if it's 'within spec'. because within spec at the start isn't within spec at the end"},
+    {"id": 104, "type": "message", "date": "2026-08-12T21:30:00", "text": "customer DM: 'your serum isn't working, I've used it 5 days.' Nothing works in 5 days. skin cell turnover is roughly 4 weeks. how do I say this without sounding defensive"},
+    {"id": 105, "type": "message", "date": "2026-08-15T08:20:00", "text": "tired today. long week."},
+    {"id": 106, "type": "message", "date": "2026-08-19T22:50:00", "text": ["another DM asking if our serum is 'preservative free'. no. water-based products without a preservative system are a contamination risk within weeks of opening. ", {"type": "bold", "text": "preservative-free is not a safety claim"}, ". it's a marketing claim that moves the risk to the customer"]},
+    {"id": 107, "type": "message", "date": "2026-08-27T13:15:00", "text": "influencer sent us a 'collab' brief. wanted us to say the serum 'transforms skin in 7 days'. said no."},
+    {"id": 108, "type": "message", "date": "2026-09-02T19:45:00", "text": "monsoon returns data: texture complaints up again in Kochi but only on the moisturiser, not the serum. we never reformulated the moisturiser base. same mistake twice?"},
+    {"id": 109, "type": "message", "date": "2026-09-10T11:00:00", "text": "thought: people ask 'how long until I see results' and the honest answer depends on what result. hydration = days. pigmentation = 8-12 weeks. nobody puts timelines on labels because the honest ones are long"},
+    {"id": 110, "type": "message", "date": "2026-09-18T23:40:00", "text": "saw a brand launch a 'waterless' serum as if water is the enemy. waterless mostly means you need less preservative. that's a real formulation benefit but they're selling it as purity"}
+  ]
+}
