@@ -69,8 +69,7 @@ def health():
     report["telegram_token_checks"] = {
         "had_spaces_quotes_or_label (now auto-removed)": tok != raw,
         "format_digits_colon_secret": bool(re.fullmatch(r"\d{6,}:[A-Za-z0-9_-]{30,}", tok)),
-        "contains_space_or_line_break_inside": any(c in tok for c in " 
-	"),
+        "contains_space_or_line_break_inside": any(c in tok for c in " \n\r\t"),
     }
     try:  # can the bot send messages with the token Vercel has?
         me = bot.telegram("getMe")
