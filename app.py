@@ -27,15 +27,20 @@ def store():
 
 def health():
     report = {"env": {k: bool(os.environ.get(k)) for k in REQUIRED + ["TELEGRAM_ALLOWED_USER_ID"]}}
-    url = os.environ.get("SUPABASE_URL", "")
+    url, key = os.environ.get("SUPABASE_URL", ""), os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
     report["supabase_url_looks_right"] = url.startswith("https://") and ".supabase.co" in url and "/rest/" not in url
+    report["supabase_key_type"] = ("secret (sb_secret_...) - correct" if key.startswith("sb_secret_")
+                                   else "legacy service_role JWT - correct" if key.startswith("eyJ")
+                                   else "publishable/anon key - WRONG, use the secret key" if key.startswith("sb_publishable_")
+                                   else "unrecognised" if key else "missing")
     try:
         s = store()
         for table in ("notes", "drafts", "voice_skill", "settings", "processed_updates"):
             s._req("GET", table, {"select": "*", "limit": "1"})
         report["supabase"] = "ok: all 5 tables reachable"
-    except Exception as e:
-        report["supabase"] = f"FAILED: {type(e).__name__}: {str(e)[:300]}"
+    except Exception as e:  # never echo the message: it can contain the URL or a key
+        code = getattr(e, "code", "")
+        report["supabase"] = f"FAILED: {type(e).__name__} {code}".strip()
     return report
 
 

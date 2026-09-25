@@ -132,8 +132,9 @@ class SupabaseStore:
 
     def __init__(self, url, service_key):
         self.base = url.rstrip("/") + "/rest/v1/"
-        self.headers = {"apikey": service_key, "Authorization": f"Bearer {service_key}",
-                        "Content-Type": "application/json"}
+        self.headers = {"apikey": service_key, "Content-Type": "application/json"}
+        if service_key.startswith("eyJ"):  # legacy service_role JWT; new sb_secret_ keys go in apikey only
+            self.headers["Authorization"] = f"Bearer {service_key}"
 
     def _req(self, method, table, query=None, body=None, prefer=None):
         url = self.base + table + ("?" + urllib.parse.urlencode(query) if query else "")
