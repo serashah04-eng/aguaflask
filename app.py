@@ -57,6 +57,17 @@ def health():
     except Exception as e:  # never echo the message: it can contain the URL or a key
         code = getattr(e, "code", "")
         report["supabase"] = f"FAILED: {type(e).__name__} {code}".strip()
+    try:
+        s = store()
+        report["rows_saved"] = {t: len(s._req("GET", t, {"select": "*"}) or [])
+                                for t in ("processed_updates", "notes", "drafts")}
+    except Exception as e:
+        report["rows_saved"] = f"unavailable: {type(e).__name__}"
+    try:  # can the bot send messages with the token Vercel has?
+        me = bot.telegram("getMe")
+        report["telegram_token"] = f"ok: @{me['username']}"
+    except Exception as e:
+        report["telegram_token"] = f"FAILED: {type(e).__name__} {getattr(e, 'code', '')}".strip()
     return report
 
 
