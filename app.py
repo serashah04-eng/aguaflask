@@ -7,6 +7,7 @@ GET /api/health reports which settings are present and whether Supabase is reach
 import hmac
 import json
 import os
+import re
 import traceback
 
 import bot
@@ -63,6 +64,14 @@ def health():
                                 for t in ("processed_updates", "notes", "drafts")}
     except Exception as e:
         report["rows_saved"] = f"unavailable: {type(e).__name__}"
+    raw = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    tok = bot.drafter.clean_token(raw)
+    report["telegram_token_checks"] = {
+        "had_spaces_quotes_or_label (now auto-removed)": tok != raw,
+        "format_digits_colon_secret": bool(re.fullmatch(r"\d{6,}:[A-Za-z0-9_-]{30,}", tok)),
+        "contains_space_or_line_break_inside": any(c in tok for c in " 
+	"),
+    }
     try:  # can the bot send messages with the token Vercel has?
         me = bot.telegram("getMe")
         report["telegram_token"] = f"ok: @{me['username']}"

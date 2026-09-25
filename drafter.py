@@ -87,8 +87,16 @@ def add_note(store, message_id, date, text, source):
 # Telegram
 # ----------------------------------------------------------------------------
 
+def clean_token(raw):
+    """Tolerate common copy-paste mistakes: spaces, line breaks, quotes, or the whole 'NAME=value' line."""
+    token = raw.strip().strip('"').strip("'").strip()
+    if token.startswith("TELEGRAM_BOT_TOKEN="):
+        token = token.split("=", 1)[1].strip().strip('"').strip("'")
+    return token
+
+
 def telegram(method, _timeout=30, **params):
-    token = os.environ.get("TELEGRAM_BOT_TOKEN")
+    token = clean_token(os.environ.get("TELEGRAM_BOT_TOKEN", ""))
     if not token:
         sys.exit("TELEGRAM_BOT_TOKEN is not set (see .env.example).")
     url = f"https://api.telegram.org/bot{token}/{method}"
