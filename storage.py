@@ -131,7 +131,10 @@ class SupabaseStore:
     """Same interface, backed by Supabase's REST API (PostgREST). Tables come from supabase_schema.sql."""
 
     def __init__(self, url, service_key):
-        self.base = url.rstrip("/") + "/rest/v1/"
+        url = url.strip().rstrip("/")
+        if url.endswith("/rest/v1"):  # accept the "API URL" form as well as the plain project URL
+            url = url[: -len("/rest/v1")]
+        self.base = url + "/rest/v1/"
         self.headers = {"apikey": service_key, "Content-Type": "application/json"}
         if service_key.startswith("eyJ"):  # legacy service_role JWT; new sb_secret_ keys go in apikey only
             self.headers["Authorization"] = f"Bearer {service_key}"

@@ -28,16 +28,32 @@ def store():
 def health():
     report = {"env": {k: bool(os.environ.get(k)) for k in REQUIRED + ["TELEGRAM_ALLOWED_USER_ID"]}}
     url, key = os.environ.get("SUPABASE_URL", ""), os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
-    report["supabase_url_looks_right"] = url.startswith("https://") and ".supabase.co" in url and "/rest/" not in url
+    u = url.strip().rstrip("/")
+    report["supabase_url_checks"] = {
+        "starts_with_https": u.startswith("https://"),
+        "is_a_supabase_co_address": ".supabase.co" in u,
+        "ends_with_rest_v1 (ok, handled)": u.endswith("/rest/v1"),
+        "has_other_path_after_domain": "/" in u.replace("https://", "", 1).removesuffix("/rest/v1"),
+        "has_spaces_or_quotes": any(c in url for c in " \"'"),
+    }
     report["supabase_key_type"] = ("secret (sb_secret_...) - correct" if key.startswith("sb_secret_")
                                    else "legacy service_role JWT - correct" if key.startswith("eyJ")
                                    else "publishable/anon key - WRONG, use the secret key" if key.startswith("sb_publishable_")
                                    else "unrecognised" if key else "missing")
     try:
         s = store()
+        missing = []
         for table in ("notes", "drafts", "voice_skill", "settings", "processed_updates"):
-            s._req("GET", table, {"select": "*", "limit": "1"})
-        report["supabase"] = "ok: all 5 tables reachable"
+            try:
+                s._req("GET", table, {"select": "*", "limit": "1"})
+            except Exception as e:
+                if getattr(e, "code", None) != 404:
+                    raise
+                missing.append(table)
+        report["supabase"] = (f"connected, but these tables are missing (run supabase_schema.sql): {missing}"
+                              if missing else "ok: all 5 tables reachable")
+        if len(missing) == 5:
+            report["supabase"] += " -- or SUPABASE_URL points at the wrong address"
     except Exception as e:  # never echo the message: it can contain the URL or a key
         code = getattr(e, "code", "")
         report["supabase"] = f"FAILED: {type(e).__name__} {code}".strip()
